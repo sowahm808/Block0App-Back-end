@@ -1,0 +1,15 @@
+using System.ComponentModel.DataAnnotations;
+
+namespace MindUnlocking.Application.Options;
+
+public sealed class JwtOptions { [Required] public string Issuer { get; init; } = string.Empty; [Required] public string Audience { get; init; } = string.Empty; [Required, MinLength(32)] public string SigningKey { get; init; } = string.Empty; public int AccessTokenMinutes { get; init; } = 15; public int RefreshTokenDays { get; init; } = 14; }
+public sealed class SqlOptions { [Required] public string ConnectionString { get; init; } = string.Empty; public int MaxRetryCount { get; init; } = 5; }
+public sealed class RedisOptions { public string ConnectionString { get; init; } = string.Empty; public bool RequiredForReadiness { get; init; } }
+public sealed class BlobStorageOptions { public string AccountName { get; init; } = string.Empty; public string Endpoint { get; init; } = string.Empty; public string CertificateContainer { get; init; } = "certificates"; }
+public sealed class ServiceBusOptions { public string Namespace { get; init; } = string.Empty; public string OutboxQueue { get; init; } = "outbox"; }
+public sealed class AzureOpenAIOptions { public string Endpoint { get; init; } = string.Empty; public string DeploymentName { get; init; } = string.Empty; public string PromptTemplateVersion { get; init; } = "v1"; }
+public sealed class AzureAISearchOptions { public string Endpoint { get; init; } = string.Empty; public string IndexName { get; init; } = "approved-content"; }
+public sealed class NotificationOptions { public int QuietHoursStart { get; init; } = 21; public int QuietHoursEnd { get; init; } = 7; }
+public sealed class CertificateOptions { public int RequiredKnowledgeQuestions { get; init; } = 800; public int RequiredScenarios { get; init; } = 130; }
+public sealed class RaffleOptions { public bool RedrawRequiresElevatedPermission { get; init; } = true; }
+public sealed class ChallengeOptions { public int DefaultTeamMinSize { get; init; } = 3; public int DefaultTeamMaxSize { get; init; } = 4; public int DurationDays { get; init; } = 21; }
