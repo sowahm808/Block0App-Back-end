@@ -1,0 +1,23 @@
+name: deploy
+on: workflow_dispatch
+permissions:
+  id-token: write
+  contents: read
+jobs:
+  deploy-staging:
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - run: az deployment group create --resource-group ${{ vars.AZURE_RESOURCE_GROUP }} --parameters infra/bicep/staging.bicepparam --template-file infra/bicep/main.bicep
+  deploy-production:
+    needs: deploy-staging
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - run: echo "Production deployment requires environment approval and health checks."
