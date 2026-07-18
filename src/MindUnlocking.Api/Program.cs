@@ -193,7 +193,7 @@ builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
 
-    options.AddPolicy("api", httpContext =>
+    options.AddPolicy<string>("api", httpContext =>
     {
         var partitionKey =
             httpContext.User.Identity?.IsAuthenticated == true
