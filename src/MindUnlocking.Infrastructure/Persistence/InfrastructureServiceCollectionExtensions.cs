@@ -4,6 +4,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using MindUnlocking.Application.Options;
 using MindUnlocking.Infrastructure.Identity;
+using MindUnlocking.Application.Security;
 using MindUnlocking.Infrastructure.Auth;
 
 namespace MindUnlocking.Infrastructure.Persistence;
@@ -25,6 +26,7 @@ public static class InfrastructureServiceCollectionExtensions
         .AddEntityFrameworkStores<MindUnlockingDbContext>()
         .AddDefaultTokenProviders();
         services.AddScoped<AuthTokenService>();
+        services.AddScoped<IAuthUseCases, AuthUseCases>();
         return services;
     }
 }
