@@ -258,8 +258,11 @@ if (!app.Environment.IsDevelopment())
     app.UseHsts();
 }
 
-app.UseHttpsRedirection();
+// CORS must run before HTTPS redirection so browser preflight
+// requests to the HTTP development endpoint receive the configured
+// Access-Control-Allow-* headers instead of a redirect response.
 app.UseCors("AllowConfiguredOrigins");
+app.UseHttpsRedirection();
 app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
