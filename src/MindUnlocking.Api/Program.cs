@@ -282,99 +282,18 @@ var v1 = app
     .RequireRateLimiting("api");
 
 // ------------------------------------------------------------
-// Auth endpoints
+// API aliases
 // ------------------------------------------------------------
 
-v1.MapPost(
-    "/auth/register",
-    async (RegisterRequest request, IAuthUseCases auth, CancellationToken cancellationToken) =>
-    {
-        var result = await auth.RegisterAsync(request, cancellationToken);
-        return result.Succeeded
-            ? Results.Created($"/api/v1/auth/users/{result.Value!.UserId}", result.Value)
-            : ToHttpResult(result);
-    })
-    .AllowAnonymous();
+// Keep the versioned route as the canonical API while also exposing
+// /api/* for existing clients configured with a /api base URL.
+MapAuthEndpoints(v1, "/api/v1");
 
-v1.MapPost(
-    "/auth/verify-email",
-    async (VerifyEmailRequest request, IAuthUseCases auth, CancellationToken cancellationToken) =>
-    {
-        var result = await auth.VerifyEmailAsync(request, cancellationToken);
-        return result.Succeeded ? Results.NoContent() : ToHttpResult(result);
-    })
-    .AllowAnonymous();
+var unversionedApi = app
+    .MapGroup("/api")
+    .RequireRateLimiting("api");
 
-v1.MapPost(
-    "/auth/login",
-    async (LoginRequest request, IAuthUseCases auth, CancellationToken cancellationToken) =>
-    {
-        var result = await auth.LoginAsync(request, cancellationToken);
-        return result.Succeeded ? Results.Ok(result.Value) : ToHttpResult(result);
-    })
-    .AllowAnonymous();
-
-v1.MapPost(
-    "/auth/refresh",
-    async (RefreshTokenRequest request, IAuthUseCases auth, CancellationToken cancellationToken) =>
-    {
-        var result = await auth.RefreshAsync(request, cancellationToken);
-        return result.Succeeded ? Results.Ok(result.Value) : ToHttpResult(result);
-    })
-    .AllowAnonymous();
-
-v1.MapPost(
-    "/auth/forgot-password",
-    async (ForgotPasswordRequest request, IAuthUseCases auth, IWebHostEnvironment environment, CancellationToken cancellationToken) =>
-        Results.Accepted(value: await auth.ForgotPasswordAsync(request, environment.IsDevelopment(), cancellationToken)))
-    .AllowAnonymous();
-
-v1.MapPost(
-    "/auth/reset-password",
-    async (ResetPasswordRequest request, IAuthUseCases auth, CancellationToken cancellationToken) =>
-    {
-        var result = await auth.ResetPasswordAsync(request, cancellationToken);
-        return result.Succeeded ? Results.NoContent() : ToHttpResult(result);
-    })
-    .AllowAnonymous();
-
-v1.MapPost(
-    "/auth/revoke",
-    async (RevokeRefreshTokenRequest request, IAuthUseCases auth, CancellationToken cancellationToken) =>
-    {
-        await auth.RevokeRefreshTokenAsync(request, cancellationToken);
-        return Results.NoContent();
-    })
-    .RequireAuthorization();
-
-v1.MapPost(
-    "/auth/logout",
-    async (HttpContext httpContext, IAuthUseCases auth, CancellationToken cancellationToken) =>
-    {
-        var userId = httpContext.User.FindFirstValue(ClaimTypes.NameIdentifier);
-        if (Guid.TryParse(userId, out var parsedUserId))
-        {
-            await auth.LogoutAsync(parsedUserId, cancellationToken);
-        }
-
-        return Results.NoContent();
-    })
-    .RequireAuthorization();
-
-v1.MapGet(
-    "/auth/me",
-    async (HttpContext httpContext, IAuthUseCases auth, CancellationToken cancellationToken) =>
-    {
-        var userId = httpContext.User.FindFirstValue(ClaimTypes.NameIdentifier);
-        if (!Guid.TryParse(userId, out var parsedUserId))
-        {
-            return Results.Unauthorized();
-        }
-
-        var result = await auth.GetCurrentUserAsync(parsedUserId, cancellationToken);
-        return result.Succeeded ? Results.Ok(result.Value) : ToHttpResult(result);
-    })
-    .RequireAuthorization();
+MapAuthEndpoints(unversionedApi, "/api");
 
 // ------------------------------------------------------------
 // Readiness
@@ -417,6 +336,100 @@ app.Run();
 // ------------------------------------------------------------
 // Helper methods
 // ------------------------------------------------------------
+
+static void MapAuthEndpoints(RouteGroupBuilder group, string routePrefix)
+{
+    group.MapPost(
+        "/auth/register",
+        async (RegisterRequest request, IAuthUseCases auth, CancellationToken cancellationToken) =>
+        {
+            var result = await auth.RegisterAsync(request, cancellationToken);
+            return result.Succeeded
+                ? Results.Created($"{routePrefix}/auth/users/{result.Value!.UserId}", result.Value)
+                : ToHttpResult(result);
+        })
+        .AllowAnonymous();
+
+    group.MapPost(
+        "/auth/verify-email",
+        async (VerifyEmailRequest request, IAuthUseCases auth, CancellationToken cancellationToken) =>
+        {
+            var result = await auth.VerifyEmailAsync(request, cancellationToken);
+            return result.Succeeded ? Results.NoContent() : ToHttpResult(result);
+        })
+        .AllowAnonymous();
+
+    group.MapPost(
+        "/auth/login",
+        async (LoginRequest request, IAuthUseCases auth, CancellationToken cancellationToken) =>
+        {
+            var result = await auth.LoginAsync(request, cancellationToken);
+            return result.Succeeded ? Results.Ok(result.Value) : ToHttpResult(result);
+        })
+        .AllowAnonymous();
+
+    group.MapPost(
+        "/auth/refresh",
+        async (RefreshTokenRequest request, IAuthUseCases auth, CancellationToken cancellationToken) =>
+        {
+            var result = await auth.RefreshAsync(request, cancellationToken);
+            return result.Succeeded ? Results.Ok(result.Value) : ToHttpResult(result);
+        })
+        .AllowAnonymous();
+
+    group.MapPost(
+        "/auth/forgot-password",
+        async (ForgotPasswordRequest request, IAuthUseCases auth, IWebHostEnvironment environment, CancellationToken cancellationToken) =>
+            Results.Accepted(value: await auth.ForgotPasswordAsync(request, environment.IsDevelopment(), cancellationToken)))
+        .AllowAnonymous();
+
+    group.MapPost(
+        "/auth/reset-password",
+        async (ResetPasswordRequest request, IAuthUseCases auth, CancellationToken cancellationToken) =>
+        {
+            var result = await auth.ResetPasswordAsync(request, cancellationToken);
+            return result.Succeeded ? Results.NoContent() : ToHttpResult(result);
+        })
+        .AllowAnonymous();
+
+    group.MapPost(
+        "/auth/revoke",
+        async (RevokeRefreshTokenRequest request, IAuthUseCases auth, CancellationToken cancellationToken) =>
+        {
+            await auth.RevokeRefreshTokenAsync(request, cancellationToken);
+            return Results.NoContent();
+        })
+        .RequireAuthorization();
+
+    group.MapPost(
+        "/auth/logout",
+        async (HttpContext httpContext, IAuthUseCases auth, CancellationToken cancellationToken) =>
+        {
+            var userId = httpContext.User.FindFirstValue(ClaimTypes.NameIdentifier);
+            if (Guid.TryParse(userId, out var parsedUserId))
+            {
+                await auth.LogoutAsync(parsedUserId, cancellationToken);
+            }
+
+            return Results.NoContent();
+        })
+        .RequireAuthorization();
+
+    group.MapGet(
+        "/auth/me",
+        async (HttpContext httpContext, IAuthUseCases auth, CancellationToken cancellationToken) =>
+        {
+            var userId = httpContext.User.FindFirstValue(ClaimTypes.NameIdentifier);
+            if (!Guid.TryParse(userId, out var parsedUserId))
+            {
+                return Results.Unauthorized();
+            }
+
+            var result = await auth.GetCurrentUserAsync(parsedUserId, cancellationToken);
+            return result.Succeeded ? Results.Ok(result.Value) : ToHttpResult(result);
+        })
+        .RequireAuthorization();
+}
 
 static IResult ToHttpResult<T>(AuthUseCaseResult<T> result) =>
     result.ErrorCode switch
