@@ -13,6 +13,10 @@ public sealed class RefreshSessionConfiguration : IEntityTypeConfiguration<Refre
         builder.Property(x => x.TokenHash).HasMaxLength(128).IsRequired();
         builder.HasIndex(x => x.TokenHash).IsUnique();
         builder.HasIndex(x => new { x.UserId, x.ExpiresUtc });
+        builder.HasOne<ApplicationUser>()
+            .WithMany()
+            .HasForeignKey(x => x.UserId)
+            .OnDelete(DeleteBehavior.Cascade);
     }
 }
 

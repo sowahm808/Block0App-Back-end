@@ -6,19 +6,14 @@ using Asp.Versioning;
 
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
-using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
-using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 
 using MindUnlocking.Application.Options;
 using MindUnlocking.Application.Security;
 using MindUnlocking.Contracts.Auth;
-using MindUnlocking.Infrastructure.Auth;
-using MindUnlocking.Infrastructure.Identity;
 using MindUnlocking.Infrastructure.Persistence;
 
 using Serilog;
@@ -287,437 +282,97 @@ var v1 = app
     .RequireRateLimiting("api");
 
 // ------------------------------------------------------------
-// Register
+// Auth endpoints
 // ------------------------------------------------------------
 
 v1.MapPost(
     "/auth/register",
-    async (
-        RegisterRequest request,
-        UserManager<ApplicationUser> users) =>
+    async (RegisterRequest request, IAuthUseCases auth, CancellationToken cancellationToken) =>
     {
-        var existingUser =
-            await users.FindByEmailAsync(request.Email);
-
-        if (existingUser is not null)
-        {
-            return Results.ValidationProblem(
-                new Dictionary<string, string[]>
-                {
-                    ["email"] =
-                    [
-                        "An account with this email address already exists."
-                    ]
-                });
-        }
-
-        var user = new ApplicationUser
-        {
-            UserName = request.Email,
-            Email = request.Email,
-            DisplayName = request.DisplayName
-        };
-
-        var result =
-            await users.CreateAsync(user, request.Password);
-
-        if (!result.Succeeded)
-        {
-            return Results.ValidationProblem(
-                ToValidationDictionary(result));
-        }
-
-        await users.AddClaimAsync(
-            user,
-            new Claim(
-                AuthorizationPolicies.PermissionClaimType,
-                MindUnlocking.Domain.Identity.Permissions
-                    .ScholarAccess));
-
-        var confirmationToken =
-            await users.GenerateEmailConfirmationTokenAsync(user);
-
-        return Results.Created(
-            $"/api/v1/auth/users/{user.Id}",
-            new RegisterResponse(
-                user.Id,
-                user.Email!,
-                confirmationToken));
+        var result = await auth.RegisterAsync(request, cancellationToken);
+        return result.Succeeded
+            ? Results.Created($"/api/v1/auth/users/{result.Value!.UserId}", result.Value)
+            : ToHttpResult(result);
     })
     .AllowAnonymous();
-
-// ------------------------------------------------------------
-// Verify email
-// ------------------------------------------------------------
 
 v1.MapPost(
     "/auth/verify-email",
-    async (
-        VerifyEmailRequest request,
-        UserManager<ApplicationUser> users) =>
+    async (VerifyEmailRequest request, IAuthUseCases auth, CancellationToken cancellationToken) =>
     {
-        var user =
-            await users.FindByEmailAsync(request.Email);
-
-        if (user is null)
-        {
-            return Results.NotFound();
-        }
-
-        var result =
-            await users.ConfirmEmailAsync(user, request.Token);
-
-        return result.Succeeded
-            ? Results.NoContent()
-            : Results.ValidationProblem(
-                ToValidationDictionary(result));
+        var result = await auth.VerifyEmailAsync(request, cancellationToken);
+        return result.Succeeded ? Results.NoContent() : ToHttpResult(result);
     })
     .AllowAnonymous();
-
-// ------------------------------------------------------------
-// Login
-// ------------------------------------------------------------
 
 v1.MapPost(
     "/auth/login",
-    async (
-        LoginRequest request,
-        UserManager<ApplicationUser> users,
-        MindUnlockingDbContext db,
-        AuthTokenService tokens,
-        IOptions<JwtOptions> jwtConfiguration) =>
+    async (LoginRequest request, IAuthUseCases auth, CancellationToken cancellationToken) =>
     {
-        var user =
-            await users.FindByEmailAsync(request.Email);
-
-        if (user is null)
-        {
-            return Results.Unauthorized();
-        }
-
-        var passwordValid =
-            await users.CheckPasswordAsync(
-                user,
-                request.Password);
-
-        if (!passwordValid)
-        {
-            return Results.Unauthorized();
-        }
-
-        if (!await users.IsEmailConfirmedAsync(user))
-        {
-            return Results.Problem(
-                detail:
-                    "Email verification is required before sign-in.",
-                statusCode:
-                    StatusCodes.Status403Forbidden);
-        }
-
-        var requiresMfa =
-            user.AdministrativeMfaRequired ||
-            await users.GetTwoFactorEnabledAsync(user);
-
-        if (requiresMfa &&
-            string.IsNullOrWhiteSpace(request.MfaCode))
-        {
-            return Results.Problem(
-                detail: "MFA code is required.",
-                statusCode:
-                    StatusCodes.Status403Forbidden);
-        }
-
-        if (!string.IsNullOrWhiteSpace(request.MfaCode))
-        {
-            var validMfaCode =
-                await users.VerifyTwoFactorTokenAsync(
-                    user,
-                    TokenOptions.DefaultAuthenticatorProvider,
-                    request.MfaCode);
-
-            if (!validMfaCode)
-            {
-                return Results.Unauthorized();
-            }
-        }
-
-        return await IssueTokenResponse(
-            user,
-            users,
-            db,
-            tokens,
-            jwtConfiguration.Value);
+        var result = await auth.LoginAsync(request, cancellationToken);
+        return result.Succeeded ? Results.Ok(result.Value) : ToHttpResult(result);
     })
     .AllowAnonymous();
-
-// ------------------------------------------------------------
-// Refresh token
-// ------------------------------------------------------------
 
 v1.MapPost(
     "/auth/refresh",
-    async (
-        RefreshTokenRequest request,
-        UserManager<ApplicationUser> users,
-        MindUnlockingDbContext db,
-        AuthTokenService tokens,
-        IOptions<JwtOptions> jwtConfiguration) =>
+    async (RefreshTokenRequest request, IAuthUseCases auth, CancellationToken cancellationToken) =>
     {
-        var now = DateTimeOffset.UtcNow;
-        var tokenHash =
-            tokens.HashRefreshToken(request.RefreshToken);
-
-        var session =
-            await db.RefreshSessions.SingleOrDefaultAsync(
-                x => x.TokenHash == tokenHash);
-
-        if (session is null)
-        {
-            return Results.Unauthorized();
-        }
-
-        if (!session.IsActive(now))
-        {
-            await db.RefreshSessions
-                .Where(x =>
-                    x.UserId == session.UserId &&
-                    x.RevokedUtc == null)
-                .ExecuteUpdateAsync(update =>
-                    update
-                        .SetProperty(
-                            item => item.RevokedUtc,
-                            now)
-                        .SetProperty(
-                            item => item.RevocationReason,
-                            "refresh-token-reuse-detected"));
-
-            return Results.Unauthorized();
-        }
-
-        var user =
-            await users.FindByIdAsync(
-                session.UserId.ToString());
-
-        if (user is null)
-        {
-            return Results.Unauthorized();
-        }
-
-        session.RevokedUtc = now;
-        session.RevocationReason = "rotated";
-
-        var newRefreshToken =
-            tokens.CreateRefreshToken();
-
-        session.ReplacedByTokenHash =
-            tokens.HashRefreshToken(newRefreshToken);
-
-        db.RefreshSessions.Add(
-            new RefreshSession
-            {
-                UserId = user.Id,
-                TokenHash = session.ReplacedByTokenHash,
-                ExpiresUtc = now.AddDays(
-                    jwtConfiguration.Value.RefreshTokenDays)
-            });
-
-        await db.SaveChangesAsync();
-
-        var permissions =
-            (await users.GetClaimsAsync(user))
-            .Where(claim =>
-                claim.Type ==
-                AuthorizationPolicies.PermissionClaimType)
-            .Select(claim => claim.Value)
-            .Distinct()
-            .ToArray();
-
-        var accessToken =
-            tokens.CreateAccessToken(
-                user,
-                permissions,
-                now,
-                out var accessTokenExpiresUtc);
-
-        return Results.Ok(
-            new TokenResponse(
-                accessToken,
-                accessTokenExpiresUtc,
-                newRefreshToken,
-                now.AddDays(
-                    jwtConfiguration.Value.RefreshTokenDays)));
+        var result = await auth.RefreshAsync(request, cancellationToken);
+        return result.Succeeded ? Results.Ok(result.Value) : ToHttpResult(result);
     })
     .AllowAnonymous();
-
-// ------------------------------------------------------------
-// Forgot password
-// ------------------------------------------------------------
 
 v1.MapPost(
     "/auth/forgot-password",
-    async (
-        ForgotPasswordRequest request,
-        UserManager<ApplicationUser> users,
-        IWebHostEnvironment environment) =>
-    {
-        var user =
-            await users.FindByEmailAsync(request.Email);
-
-        // Do not reveal whether the email exists.
-        if (user is null)
-        {
-            return Results.Accepted(
-                value: new ForgotPasswordResponse(null));
-        }
-
-        var token =
-            await users.GeneratePasswordResetTokenAsync(user);
-
-        return Results.Accepted(
-            value: new ForgotPasswordResponse(
-                environment.IsDevelopment()
-                    ? token
-                    : null));
-    })
+    async (ForgotPasswordRequest request, IAuthUseCases auth, IWebHostEnvironment environment, CancellationToken cancellationToken) =>
+        Results.Accepted(value: await auth.ForgotPasswordAsync(request, environment.IsDevelopment(), cancellationToken)))
     .AllowAnonymous();
-
-// ------------------------------------------------------------
-// Reset password
-// ------------------------------------------------------------
 
 v1.MapPost(
     "/auth/reset-password",
-    async (
-        ResetPasswordRequest request,
-        UserManager<ApplicationUser> users) =>
+    async (ResetPasswordRequest request, IAuthUseCases auth, CancellationToken cancellationToken) =>
     {
-        var user =
-            await users.FindByEmailAsync(request.Email);
-
-        // Do not reveal whether an account exists.
-        if (user is null)
-        {
-            return Results.NoContent();
-        }
-
-        var result =
-            await users.ResetPasswordAsync(
-                user,
-                request.Token,
-                request.NewPassword);
-
-        return result.Succeeded
-            ? Results.NoContent()
-            : Results.ValidationProblem(
-                ToValidationDictionary(result));
+        var result = await auth.ResetPasswordAsync(request, cancellationToken);
+        return result.Succeeded ? Results.NoContent() : ToHttpResult(result);
     })
     .AllowAnonymous();
 
-// ------------------------------------------------------------
-// Revoke refresh token
-// ------------------------------------------------------------
-
 v1.MapPost(
     "/auth/revoke",
-    async (
-        RevokeRefreshTokenRequest request,
-        MindUnlockingDbContext db,
-        AuthTokenService tokens) =>
+    async (RevokeRefreshTokenRequest request, IAuthUseCases auth, CancellationToken cancellationToken) =>
     {
-        var tokenHash =
-            tokens.HashRefreshToken(request.RefreshToken);
-
-        var session =
-            await db.RefreshSessions.SingleOrDefaultAsync(
-                x => x.TokenHash == tokenHash);
-
-        if (session is not null &&
-            session.RevokedUtc is null)
-        {
-            session.RevokedUtc =
-                DateTimeOffset.UtcNow;
-
-            session.RevocationReason =
-                request.Reason;
-
-            await db.SaveChangesAsync();
-        }
-
+        await auth.RevokeRefreshTokenAsync(request, cancellationToken);
         return Results.NoContent();
     })
     .RequireAuthorization();
-
-// ------------------------------------------------------------
-// Logout
-// ------------------------------------------------------------
 
 v1.MapPost(
     "/auth/logout",
-    async (
-        HttpContext httpContext,
-        MindUnlockingDbContext db) =>
+    async (HttpContext httpContext, IAuthUseCases auth, CancellationToken cancellationToken) =>
     {
-        var userId =
-            httpContext.User.FindFirstValue(
-                ClaimTypes.NameIdentifier);
-
+        var userId = httpContext.User.FindFirstValue(ClaimTypes.NameIdentifier);
         if (Guid.TryParse(userId, out var parsedUserId))
         {
-            var now = DateTimeOffset.UtcNow;
-
-            await db.RefreshSessions
-                .Where(session =>
-                    session.UserId == parsedUserId &&
-                    session.RevokedUtc == null)
-                .ExecuteUpdateAsync(update =>
-                    update
-                        .SetProperty(
-                            session => session.RevokedUtc,
-                            now)
-                        .SetProperty(
-                            session => session.RevocationReason,
-                            "logout"));
+            await auth.LogoutAsync(parsedUserId, cancellationToken);
         }
 
         return Results.NoContent();
     })
     .RequireAuthorization();
 
-// ------------------------------------------------------------
-// Current user
-// ------------------------------------------------------------
-
 v1.MapGet(
     "/auth/me",
-    async (
-        HttpContext httpContext,
-        UserManager<ApplicationUser> users) =>
+    async (HttpContext httpContext, IAuthUseCases auth, CancellationToken cancellationToken) =>
     {
-        var user =
-            await users.GetUserAsync(httpContext.User);
-
-        if (user is null)
+        var userId = httpContext.User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (!Guid.TryParse(userId, out var parsedUserId))
         {
             return Results.Unauthorized();
         }
 
-        var permissions =
-            (await users.GetClaimsAsync(user))
-            .Where(claim =>
-                claim.Type ==
-                AuthorizationPolicies.PermissionClaimType)
-            .Select(claim => claim.Value)
-            .Distinct()
-            .ToArray();
-
-        return Results.Ok(
-            new CurrentUserResponse(
-                user.Id,
-                user.Email ?? string.Empty,
-                user.DisplayName,
-                permissions,
-                user.EmailConfirmed,
-                user.TwoFactorEnabled));
+        var result = await auth.GetCurrentUserAsync(parsedUserId, cancellationToken);
+        return result.Succeeded ? Results.Ok(result.Value) : ToHttpResult(result);
     })
     .RequireAuthorization();
 
@@ -763,65 +418,20 @@ app.Run();
 // Helper methods
 // ------------------------------------------------------------
 
-static Dictionary<string, string[]> ToValidationDictionary(
-    IdentityResult result)
-{
-    return result.Errors
-        .GroupBy(error => error.Code)
-        .ToDictionary(
-            group => group.Key,
-            group => group
-                .Select(error => error.Description)
-                .ToArray());
-}
-
-static async Task<IResult> IssueTokenResponse(
-    ApplicationUser user,
-    UserManager<ApplicationUser> users,
-    MindUnlockingDbContext db,
-    AuthTokenService tokens,
-    JwtOptions jwtOptions)
-{
-    var now = DateTimeOffset.UtcNow;
-
-    var permissions =
-        (await users.GetClaimsAsync(user))
-        .Where(claim =>
-            claim.Type ==
-            AuthorizationPolicies.PermissionClaimType)
-        .Select(claim => claim.Value)
-        .Distinct()
-        .ToArray();
-
-    var accessToken =
-        tokens.CreateAccessToken(
-            user,
-            permissions,
-            now,
-            out var accessTokenExpiresUtc);
-
-    var refreshToken =
-        tokens.CreateRefreshToken();
-
-    db.RefreshSessions.Add(
-        new RefreshSession
-        {
-            UserId = user.Id,
-            TokenHash =
-                tokens.HashRefreshToken(refreshToken),
-            ExpiresUtc =
-                now.AddDays(jwtOptions.RefreshTokenDays)
-        });
-
-    await db.SaveChangesAsync();
-
-    return Results.Ok(
-        new TokenResponse(
-            accessToken,
-            accessTokenExpiresUtc,
-            refreshToken,
-            now.AddDays(jwtOptions.RefreshTokenDays)));
-}
+static IResult ToHttpResult<T>(AuthUseCaseResult<T> result) =>
+    result.ErrorCode switch
+    {
+        AuthErrorCode.DuplicateEmail or AuthErrorCode.ValidationFailed =>
+            Results.ValidationProblem(result.ValidationErrors?.ToDictionary(x => x.Key, x => x.Value) ?? []),
+        AuthErrorCode.EmailVerificationRequired =>
+            Results.Problem(detail: "Email verification is required before sign-in.", statusCode: StatusCodes.Status403Forbidden),
+        AuthErrorCode.MfaRequired =>
+            Results.Problem(detail: "MFA code is required.", statusCode: StatusCodes.Status403Forbidden),
+        AuthErrorCode.UserNotFound => Results.NotFound(),
+        AuthErrorCode.InvalidCredentials or AuthErrorCode.InvalidMfaCode or AuthErrorCode.InvalidRefreshToken =>
+            Results.Unauthorized(),
+        _ => Results.Problem(statusCode: StatusCodes.Status500InternalServerError)
+    };
 
 public partial class Program
 {
