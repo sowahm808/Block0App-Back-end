@@ -8,8 +8,8 @@
 - Workers project contains the durable outbox-processing host boundary.
 
 ## Missing production requirements and risks
-- Auth endpoints are mapped but still need full registration, email verification, JWT issuance, refresh-token rotation, reuse detection, MFA enforcement, forgot/reset password, logout, and revocation. Risk: cannot safely authenticate users.
-- EF migrations and full domain schema are not generated because this environment lacks the .NET SDK. Risk: database cannot be deployed yet.
+- Auth endpoints implement registration, email verification, JWT issuance, refresh-token rotation, reuse detection, MFA enforcement, forgot/reset password, logout, and revocation. Risk remaining: notification delivery, production MFA enrollment UX, and expanded auth testing still need hardening.
+- Initial Identity, refresh-session, and outbox EF migration exists; the remaining full learning-domain schema still needs migrations as features are implemented. Risk: learning-domain database surfaces cannot be deployed yet.
 - W1/W2/W3 service and persistence are only domain/contract foundations. Risk: no complete learning flow yet.
 - Azure services, AI/RAG, certificates, notifications, bicep modules, and CI/CD are scaffolds or pending. Risk: not deployable to Azure production yet.
 - Integration, architecture, functional, and security suites must be expanded after runtime implementation.
@@ -21,8 +21,8 @@
 - [x] Permission constants and authorization policy registration.
 - [x] ProblemDetails, Swagger, rate limiting, security headers, health endpoints.
 - [x] Initial domain tests for readiness, question idempotency, W1 leakage contract.
-- [ ] Implement complete auth use cases and token services.
-- [ ] Generate initial EF Core migration.
+- [x] Implement complete auth use cases and token services.
+- [x] Generate initial EF Core migration.
 - [ ] Run dotnet format/build/test in an environment with .NET 8 SDK.
 
 ## Phase 2 — Learning core
