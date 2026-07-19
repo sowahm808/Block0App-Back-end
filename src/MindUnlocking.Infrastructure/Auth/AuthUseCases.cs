@@ -17,6 +17,12 @@ public sealed class AuthUseCases(
 {
     public async Task<AuthUseCaseResult<RegisterResponse>> RegisterAsync(RegisterRequest request, CancellationToken cancellationToken = default)
     {
+        var requestValidationErrors = AuthRequestValidation.ValidateRegister(request);
+        if (requestValidationErrors.Count > 0)
+        {
+            return AuthUseCaseResult<RegisterResponse>.Failure(AuthErrorCode.ValidationFailed, requestValidationErrors);
+        }
+
         var email = request.Email.Trim();
         var existingUser = await users.FindByEmailAsync(email);
         if (existingUser is not null)
