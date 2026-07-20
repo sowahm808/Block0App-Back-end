@@ -284,6 +284,29 @@ var v1 = app
     .MapToApiVersion(new ApiVersion(1, 0))
     .RequireRateLimiting("api");
 
+v1.MapGet(
+    string.Empty,
+    () => Results.Ok(
+        new
+        {
+            name = "MindUnlocking API",
+            version = "v1",
+            status = "available",
+            endpoints = new
+            {
+                health = "/health/live",
+                readiness = "/api/v1/readiness/current",
+                auth = new
+                {
+                    register = "/api/v1/auth/register",
+                    login = "/api/v1/auth/login",
+                    refresh = "/api/v1/auth/refresh",
+                    me = "/api/v1/auth/me"
+                }
+            }
+        }))
+    .AllowAnonymous();
+
 // ------------------------------------------------------------
 // API aliases
 // ------------------------------------------------------------
