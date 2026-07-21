@@ -38,8 +38,8 @@ public sealed class AuthUseCases(FirebaseApp app, FirebaseUserStore store, AuthT
             var user = new ApplicationUser { Id = record.Uid, Email = email, DisplayName = request.DisplayName.Trim(), Permissions = [Permissions.ScholarAccess] };
             await store.SaveUserAsync(user, cancellationToken);
             await _firebaseAuth.SetCustomUserClaimsAsync(record.Uid, new Dictionary<string, object> { ["permissions"] = user.Permissions.ToArray(), ["role"] = "scholar" }, cancellationToken);
-            var link = await _firebaseAuth.GenerateEmailVerificationLinkAsync(email, _actionCodeSettings, cancellationToken);
-            logger.LogInformation("Created Firebase user {UserId} and generated email verification link.", record.Uid);
+            var link = await GenerateEmailVerificationLinkAsync(email, record.Uid, cancellationToken);
+            logger.LogInformation("Created Firebase user {UserId}.", record.Uid);
             return AuthUseCaseResult<RegisterResponse>.Success(new RegisterResponse(record.Uid, email, link));
         }
         catch (FirebaseAuthException ex) when (ex.AuthErrorCode == FirebaseAdmin.Auth.AuthErrorCode.EmailAlreadyExists)
@@ -109,6 +109,23 @@ public sealed class AuthUseCases(FirebaseApp app, FirebaseUserStore store, AuthT
     {
         var user = await store.GetUserAsync(userId, cancellationToken);
         return user is null ? AuthUseCaseResult<CurrentUserResponse>.Failure(AppAuthErrorCode.UserNotFound) : AuthUseCaseResult<CurrentUserResponse>.Success(new CurrentUserResponse(user.Id, user.Email, user.DisplayName, user.Permissions, user.EmailVerified, user.MfaEnabled));
+    }
+
+    private async Task<string> GenerateEmailVerificationLinkAsync(string email, string userId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await _firebaseAuth.GenerateEmailVerificationLinkAsync(email, _actionCodeSettings, cancellationToken);
+        }
+        catch (FirebaseAuthException exception)
+        {
+            logger.LogWarning(
+                exception,
+                "Failed to generate Firebase email verification link with configured action URL for user {UserId}; retrying with Firebase defaults.",
+                userId);
+
+            return await _firebaseAuth.GenerateEmailVerificationLinkAsync(email, null, cancellationToken);
+        }
     }
 
     private async Task<TokenResponse> IssueTokenResponse(ApplicationUser user, CancellationToken cancellationToken)
