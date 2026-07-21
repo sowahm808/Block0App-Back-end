@@ -38,6 +38,6 @@ public interface IAuthUseCases
     Task<ForgotPasswordResponse> ForgotPasswordAsync(ForgotPasswordRequest request, bool includeResetToken, CancellationToken cancellationToken = default);
     Task<AuthUseCaseResult<object>> ResetPasswordAsync(ResetPasswordRequest request, CancellationToken cancellationToken = default);
     Task RevokeRefreshTokenAsync(RevokeRefreshTokenRequest request, CancellationToken cancellationToken = default);
-    Task LogoutAsync(Guid userId, CancellationToken cancellationToken = default);
-    Task<AuthUseCaseResult<CurrentUserResponse>> GetCurrentUserAsync(Guid userId, CancellationToken cancellationToken = default);
+    Task LogoutAsync(string userId, CancellationToken cancellationToken = default);
+    Task<AuthUseCaseResult<CurrentUserResponse>> GetCurrentUserAsync(string userId, CancellationToken cancellationToken = default);
 }

@@ -1,0 +1,24 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function hasPermission(permission) {
+      return signedIn() && request.auth.token.permissions is list && permission in request.auth.token.permissions;
+    }
+    function isSelf(uid) { return signedIn() && request.auth.uid == uid; }
+
+    match /users/{uid} {
+      allow read: if isSelf(uid) || hasPermission('admin:access');
+      allow create, update: if false;
+      allow delete: if hasPermission('admin:access');
+    }
+
+    match /refreshSessions/{sessionId} {
+      allow read, write: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if hasPermission('admin:access');
+    }
+  }
+}
