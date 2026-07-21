@@ -1,4 +1,5 @@
 using FirebaseAdmin;
+using FirebaseAdmin.Auth;
 using Google.Apis.Auth.OAuth2;
 using Google.Cloud.Firestore;
 using Microsoft.Extensions.Configuration;
@@ -47,6 +48,7 @@ public static class InfrastructureServiceCollectionExtensions
 
             return builder.Build();
         });
+        services.AddSingleton(provider => FirebaseAuth.GetAuth(provider.GetRequiredService<FirebaseApp>()));
         services.AddSingleton<FirebaseUserStore>();
         services.AddSingleton<AuthTokenService>();
         services.AddScoped<IAuthUseCases, AuthUseCases>();

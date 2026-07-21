@@ -2,6 +2,8 @@ using FirebaseAdmin;
 using FirebaseAdmin.Auth;
 using Google.Cloud.Firestore;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using MindUnlocking.Application.Options;
 using MindUnlocking.Application.Security;
 using AppAuthErrorCode = MindUnlocking.Application.Security.AuthErrorCode;
 using MindUnlocking.Contracts.Auth;
@@ -10,8 +12,13 @@ using MindUnlocking.Infrastructure.Identity;
 
 namespace MindUnlocking.Infrastructure.Auth;
 
-public sealed class AuthUseCases(FirebaseApp app, FirebaseUserStore store, AuthTokenService tokens, ILogger<AuthUseCases> logger) : IAuthUseCases
+public sealed class AuthUseCases(FirebaseApp app, FirebaseUserStore store, AuthTokenService tokens, IOptions<FirebaseOptions> options, ILogger<AuthUseCases> logger) : IAuthUseCases
 {
+    private readonly FirebaseAuth _firebaseAuth = FirebaseAuth.GetAuth(app);
+    private readonly ActionCodeSettings _actionCodeSettings = new()
+    {
+        Url = options.Value.ActionCodeUrl
+    };
     public async Task<AuthUseCaseResult<RegisterResponse>> RegisterAsync(RegisterRequest request, CancellationToken cancellationToken = default)
     {
         var errors = AuthRequestValidation.ValidateRegister(request);
@@ -20,7 +27,7 @@ public sealed class AuthUseCases(FirebaseApp app, FirebaseUserStore store, AuthT
         var email = request.Email.Trim();
         try
         {
-            var record = await FirebaseAuth.DefaultInstance.CreateUserAsync(new UserRecordArgs
+            var record = await _firebaseAuth.CreateUserAsync(new UserRecordArgs
             {
                 Email = email,
                 Password = request.Password,
@@ -30,8 +37,9 @@ public sealed class AuthUseCases(FirebaseApp app, FirebaseUserStore store, AuthT
 
             var user = new ApplicationUser { Id = record.Uid, Email = email, DisplayName = request.DisplayName.Trim(), Permissions = [Permissions.ScholarAccess] };
             await store.SaveUserAsync(user, cancellationToken);
-            await FirebaseAuth.DefaultInstance.SetCustomUserClaimsAsync(record.Uid, new Dictionary<string, object> { ["permissions"] = user.Permissions.ToArray(), ["role"] = "scholar" }, cancellationToken);
-            var link = await FirebaseAuth.DefaultInstance.GenerateEmailVerificationLinkAsync(email, cancellationToken: cancellationToken);
+            await _firebaseAuth.SetCustomUserClaimsAsync(record.Uid, new Dictionary<string, object> { ["permissions"] = user.Permissions.ToArray(), ["role"] = "scholar" }, cancellationToken);
+            var link = await _firebaseAuth.GenerateEmailVerificationLinkAsync(email, _actionCodeSettings, cancellationToken);
+            logger.LogInformation("Created Firebase user {UserId} and generated email verification link.", record.Uid);
             return AuthUseCaseResult<RegisterResponse>.Success(new RegisterResponse(record.Uid, email, link));
         }
         catch (FirebaseAuthException ex) when (ex.AuthErrorCode == FirebaseAdmin.Auth.AuthErrorCode.EmailAlreadyExists)
@@ -42,8 +50,8 @@ public sealed class AuthUseCases(FirebaseApp app, FirebaseUserStore store, AuthT
 
     public async Task<AuthUseCaseResult<object>> VerifyEmailAsync(VerifyEmailRequest request, CancellationToken cancellationToken = default)
     {
-        var decoded = await FirebaseAuth.DefaultInstance.VerifyIdTokenAsync(request.Token, cancellationToken);
-        var user = await FirebaseAuth.DefaultInstance.GetUserAsync(decoded.Uid, cancellationToken);
+        var decoded = await _firebaseAuth.VerifyIdTokenAsync(request.Token, cancellationToken);
+        var user = await _firebaseAuth.GetUserAsync(decoded.Uid, cancellationToken);
         if (!string.Equals(user.Email, request.Email.Trim(), StringComparison.OrdinalIgnoreCase)) return AuthUseCaseResult<object>.Failure(AppAuthErrorCode.UserNotFound);
         await store.UserDocument(decoded.Uid).UpdateAsync("emailVerified", user.EmailVerified, cancellationToken: cancellationToken);
         return AuthUseCaseResult<object>.Success(new object());
@@ -52,8 +60,8 @@ public sealed class AuthUseCases(FirebaseApp app, FirebaseUserStore store, AuthT
     public async Task<AuthUseCaseResult<TokenResponse>> LoginAsync(LoginRequest request, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(request.FirebaseIdToken)) return AuthUseCaseResult<TokenResponse>.Failure(AppAuthErrorCode.InvalidCredentials);
-        var decoded = await FirebaseAuth.DefaultInstance.VerifyIdTokenAsync(request.FirebaseIdToken, cancellationToken);
-        var firebaseUser = await FirebaseAuth.DefaultInstance.GetUserAsync(decoded.Uid, cancellationToken);
+        var decoded = await _firebaseAuth.VerifyIdTokenAsync(request.FirebaseIdToken, cancellationToken);
+        var firebaseUser = await _firebaseAuth.GetUserAsync(decoded.Uid, cancellationToken);
         if (!firebaseUser.EmailVerified) return AuthUseCaseResult<TokenResponse>.Failure(AppAuthErrorCode.EmailVerificationRequired);
         var user = await store.GetUserAsync(decoded.Uid, cancellationToken) ?? new ApplicationUser { Id = decoded.Uid, Email = firebaseUser.Email, DisplayName = firebaseUser.DisplayName, EmailVerified = firebaseUser.EmailVerified, Permissions = [Permissions.ScholarAccess] };
         user.EmailVerified = firebaseUser.EmailVerified;
@@ -77,7 +85,7 @@ public sealed class AuthUseCases(FirebaseApp app, FirebaseUserStore store, AuthT
 
     public async Task<ForgotPasswordResponse> ForgotPasswordAsync(ForgotPasswordRequest request, bool includeResetToken, CancellationToken cancellationToken = default)
     {
-        var link = await FirebaseAuth.DefaultInstance.GeneratePasswordResetLinkAsync(request.Email.Trim(), cancellationToken: cancellationToken);
+        var link = await _firebaseAuth.GeneratePasswordResetLinkAsync(request.Email.Trim(), _actionCodeSettings, cancellationToken);
         return new ForgotPasswordResponse(includeResetToken ? link : null);
     }
 

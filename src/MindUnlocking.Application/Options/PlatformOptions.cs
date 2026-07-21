@@ -10,6 +10,7 @@ public sealed class FirebaseOptions
     public string? ServiceAccountPath { get; init; }
     public string UsersCollection { get; init; } = "users";
     public string RefreshSessionsCollection { get; init; } = "refreshSessions";
+    public string ActionCodeUrl { get; init; } = "http://localhost:3000";
 }
 
 public sealed class RedisOptions { public string ConnectionString { get; init; } = string.Empty; public bool RequiredForReadiness { get; init; } }
