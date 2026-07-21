@@ -15,4 +15,25 @@ public sealed class AuthRequestValidationTests
         result.Should().ContainKey("password");
         result.Should().ContainKey("displayName");
     }
+
+    [Fact]
+    public void Register_validation_returns_field_errors_for_invalid_email_and_short_password()
+    {
+        var result = AuthRequestValidation.ValidateRegister(
+            new RegisterRequest("not-an-email", "short", "Michael Sowah"));
+
+        result.Should().ContainKey("email")
+            .WhoseValue.Should().Contain("Enter a valid email address.");
+        result.Should().ContainKey("password")
+            .WhoseValue.Should().Contain("Password must be at least 12 characters.");
+    }
+
+    [Fact]
+    public void Register_validation_accepts_valid_registration_details()
+    {
+        var result = AuthRequestValidation.ValidateRegister(
+            new RegisterRequest("sowahm@gmail.com", "twelve-chars", "Michael Sowah"));
+
+        result.Should().BeEmpty();
+    }
 }
