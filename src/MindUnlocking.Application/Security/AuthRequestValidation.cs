@@ -37,6 +37,18 @@ public static class AuthRequestValidation
         return errors;
     }
 
+    public static IReadOnlyDictionary<string, string[]> ValidateLogin(LoginRequest request)
+    {
+        var errors = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase);
+
+        if (string.IsNullOrWhiteSpace(request.FirebaseIdToken))
+        {
+            errors["firebaseIdToken"] = ["Firebase ID token is required. Sign in with Firebase on the client and send the resulting ID token."];
+        }
+
+        return errors;
+    }
+
     private static bool IsValidEmail(string email)
     {
         try

@@ -36,4 +36,23 @@ public sealed class AuthRequestValidationTests
 
         result.Should().BeEmpty();
     }
+
+    [Fact]
+    public void Login_validation_requires_firebase_id_token()
+    {
+        var result = AuthRequestValidation.ValidateLogin(
+            new LoginRequest("sowahm@gmail.com", "password", null));
+
+        result.Should().ContainKey("firebaseIdToken")
+            .WhoseValue.Should().Contain("Firebase ID token is required. Sign in with Firebase on the client and send the resulting ID token.");
+    }
+
+    [Fact]
+    public void Login_validation_accepts_firebase_id_token()
+    {
+        var result = AuthRequestValidation.ValidateLogin(
+            new LoginRequest("sowahm@gmail.com", "password", null, "firebase-token"));
+
+        result.Should().BeEmpty();
+    }
 }
