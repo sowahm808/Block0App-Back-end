@@ -10,6 +10,7 @@ flowchart LR
   Api-->Application
   Application-->Domain
   Api-->Infrastructure
+  Infrastructure-->Firestore[(Cloud Firestore)]
   Infrastructure-->Sql[(Azure SQL)]
   Infrastructure-->Redis[(Azure Cache for Redis)]
   Infrastructure-->Blob[(Azure Blob Storage)]
@@ -17,7 +18,7 @@ flowchart LR
   Workers-->Infrastructure
 ```
 
-The repository now contains a .NET 8 solution skeleton with API, Application, Domain, Infrastructure, Contracts, Workers, and test projects. Phase 1 establishes configuration validation, Identity-ready persistence, policy authorization, ProblemDetails, rate limiting, health checks, Serilog, OpenAPI, and an outbox worker foundation.
+The repository now contains a .NET 8 solution skeleton with API, Application, Domain, Infrastructure, Contracts, Workers, and test projects. Phase 1 establishes configuration validation, Identity-ready persistence, policy authorization, ProblemDetails, rate limiting, health checks, Serilog, OpenAPI, and an outbox worker foundation. Registered and returning Firebase users are persisted in the configured Cloud Firestore users collection so application profile and authorization metadata are available outside Firebase Authentication.
 
 ## Production status
 

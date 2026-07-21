@@ -8,4 +8,7 @@
     <PackageReference Include="xunit.runner.visualstudio" Version="2.8.1" />
     <PackageReference Include="FluentAssertions" Version="6.12.0" />
   </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\MindUnlocking.Infrastructure\MindUnlocking.Infrastructure.csproj" />
+  </ItemGroup>
 </Project>
