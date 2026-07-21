@@ -29,9 +29,10 @@ public static class InfrastructureServiceCollectionExtensions
             }
 
             var appOptions = new AppOptions { ProjectId = options.ProjectId };
-            if (!string.IsNullOrWhiteSpace(options.ServiceAccountPath))
+            var credential = CreateGoogleCredential(options);
+            if (credential is not null)
             {
-                appOptions.Credential = GoogleCredential.FromFile(options.ServiceAccountPath);
+                appOptions.Credential = credential;
             }
 
             return FirebaseApp.Create(appOptions);
@@ -41,9 +42,10 @@ public static class InfrastructureServiceCollectionExtensions
         {
             var options = provider.GetRequiredService<IOptions<FirebaseOptions>>().Value;
             var builder = new FirestoreDbBuilder { ProjectId = options.ProjectId };
-            if (!string.IsNullOrWhiteSpace(options.ServiceAccountPath))
+            var credential = CreateGoogleCredential(options);
+            if (credential is not null)
             {
-                builder.Credential = GoogleCredential.FromFile(options.ServiceAccountPath);
+                builder.Credential = credential;
             }
 
             return builder.Build();
@@ -53,5 +55,20 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSingleton<AuthTokenService>();
         services.AddScoped<IAuthUseCases, AuthUseCases>();
         return services;
+    }
+
+    private static GoogleCredential? CreateGoogleCredential(FirebaseOptions options)
+    {
+        if (!string.IsNullOrWhiteSpace(options.ServiceAccountJson))
+        {
+            return GoogleCredential.FromJson(options.ServiceAccountJson);
+        }
+
+        if (!string.IsNullOrWhiteSpace(options.ServiceAccountPath))
+        {
+            return GoogleCredential.FromFile(options.ServiceAccountPath);
+        }
+
+        return null;
     }
 }

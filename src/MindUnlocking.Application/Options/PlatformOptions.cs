@@ -8,6 +8,7 @@ public sealed class FirebaseOptions
     public string ProjectId { get; init; } = string.Empty;
 
     public string? ServiceAccountPath { get; init; }
+    public string? ServiceAccountJson { get; init; }
     public string UsersCollection { get; init; } = "users";
     public string RefreshSessionsCollection { get; init; } = "refreshSessions";
     public string ActionCodeUrl { get; init; } = "http://localhost:3000";
