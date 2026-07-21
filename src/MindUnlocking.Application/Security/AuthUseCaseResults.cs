@@ -12,7 +12,8 @@ public enum AuthErrorCode
     InvalidMfaCode,
     InvalidRefreshToken,
     UserNotFound,
-    ValidationFailed
+    ValidationFailed,
+    ExternalProviderUnavailable
 }
 
 public sealed record AuthUseCaseResult<T>(

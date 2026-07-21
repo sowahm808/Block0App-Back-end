@@ -35,12 +35,21 @@ public sealed class AuthUseCases(FirebaseApp app, FirebaseUserStore store, AuthT
                 EmailVerified = false
             }, cancellationToken);
 
-            var user = new ApplicationUser { Id = record.Uid, Email = email, DisplayName = request.DisplayName.Trim(), Permissions = [Permissions.ScholarAccess] };
-            await store.SaveUserAsync(user, cancellationToken);
-            await _firebaseAuth.SetCustomUserClaimsAsync(record.Uid, new Dictionary<string, object> { ["permissions"] = user.Permissions.ToArray(), ["role"] = "scholar" }, cancellationToken);
-            var link = await GenerateEmailVerificationLinkAsync(email, record.Uid, cancellationToken);
-            logger.LogInformation("Created Firebase user {UserId}.", record.Uid);
-            return AuthUseCaseResult<RegisterResponse>.Success(new RegisterResponse(record.Uid, email, link));
+            try
+            {
+                var user = new ApplicationUser { Id = record.Uid, Email = email, DisplayName = request.DisplayName.Trim(), Permissions = [Permissions.ScholarAccess] };
+                await store.SaveUserAsync(user, cancellationToken);
+                await _firebaseAuth.SetCustomUserClaimsAsync(record.Uid, new Dictionary<string, object> { ["permissions"] = user.Permissions.ToArray(), ["role"] = "scholar" }, cancellationToken);
+                var link = await GenerateEmailVerificationLinkAsync(email, record.Uid, cancellationToken);
+                logger.LogInformation("Created Firebase user {UserId}.", record.Uid);
+                return AuthUseCaseResult<RegisterResponse>.Success(new RegisterResponse(record.Uid, email, link));
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                logger.LogError(ex, "Failed to finish registration setup for Firebase user {UserId}; rolling back the auth user.", record.Uid);
+                await TryDeleteFirebaseUserAsync(record.Uid, cancellationToken);
+                return AuthUseCaseResult<RegisterResponse>.Failure(AppAuthErrorCode.ExternalProviderUnavailable);
+            }
         }
         catch (FirebaseAuthException ex) when (ex.AuthErrorCode == FirebaseAdmin.Auth.AuthErrorCode.EmailAlreadyExists)
         {
@@ -50,6 +59,11 @@ public sealed class AuthUseCases(FirebaseApp app, FirebaseUserStore store, AuthT
         {
             logger.LogWarning(ex, "Firebase rejected registration input for {Email}.", email);
             return AuthUseCaseResult<RegisterResponse>.Failure(AppAuthErrorCode.ValidationFailed, ToFirebaseValidationErrors(ex));
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogError(ex, "Firebase registration provider failed before auth user creation for {Email}.", email);
+            return AuthUseCaseResult<RegisterResponse>.Failure(AppAuthErrorCode.ExternalProviderUnavailable);
         }
     }
 
@@ -114,6 +128,18 @@ public sealed class AuthUseCases(FirebaseApp app, FirebaseUserStore store, AuthT
     {
         var user = await store.GetUserAsync(userId, cancellationToken);
         return user is null ? AuthUseCaseResult<CurrentUserResponse>.Failure(AppAuthErrorCode.UserNotFound) : AuthUseCaseResult<CurrentUserResponse>.Success(new CurrentUserResponse(user.Id, user.Email, user.DisplayName, user.Permissions, user.EmailVerified, user.MfaEnabled));
+    }
+
+    private async Task TryDeleteFirebaseUserAsync(string userId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await _firebaseAuth.DeleteUserAsync(userId, cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(ex, "Failed to roll back Firebase auth user {UserId} after registration setup failure.", userId);
+        }
     }
 
     private async Task<string> GenerateEmailVerificationLinkAsync(string email, string userId, CancellationToken cancellationToken)
