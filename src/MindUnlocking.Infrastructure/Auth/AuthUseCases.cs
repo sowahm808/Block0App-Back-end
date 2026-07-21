@@ -79,13 +79,22 @@ public sealed class AuthUseCases(FirebaseApp app, FirebaseUserStore store, AuthT
     public async Task<AuthUseCaseResult<TokenResponse>> LoginAsync(LoginRequest request, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(request.FirebaseIdToken)) return AuthUseCaseResult<TokenResponse>.Failure(AppAuthErrorCode.InvalidCredentials);
-        var decoded = await _firebaseAuth.VerifyIdTokenAsync(request.FirebaseIdToken, cancellationToken);
-        var firebaseUser = await _firebaseAuth.GetUserAsync(decoded.Uid, cancellationToken);
-        if (!firebaseUser.EmailVerified) return AuthUseCaseResult<TokenResponse>.Failure(AppAuthErrorCode.EmailVerificationRequired);
-        var user = await store.GetUserAsync(decoded.Uid, cancellationToken) ?? new ApplicationUser { Id = decoded.Uid, Email = firebaseUser.Email, DisplayName = firebaseUser.DisplayName, EmailVerified = firebaseUser.EmailVerified, Permissions = [Permissions.ScholarAccess] };
-        user.EmailVerified = firebaseUser.EmailVerified;
-        await store.SaveUserAsync(user, cancellationToken);
-        return AuthUseCaseResult<TokenResponse>.Success(await IssueTokenResponse(user, cancellationToken));
+
+        try
+        {
+            var decoded = await _firebaseAuth.VerifyIdTokenAsync(request.FirebaseIdToken, cancellationToken);
+            var firebaseUser = await _firebaseAuth.GetUserAsync(decoded.Uid, cancellationToken);
+            if (!firebaseUser.EmailVerified) return AuthUseCaseResult<TokenResponse>.Failure(AppAuthErrorCode.EmailVerificationRequired);
+            var user = await store.GetUserAsync(decoded.Uid, cancellationToken) ?? new ApplicationUser { Id = decoded.Uid, Email = firebaseUser.Email, DisplayName = firebaseUser.DisplayName, EmailVerified = firebaseUser.EmailVerified, Permissions = [Permissions.ScholarAccess] };
+            user.EmailVerified = firebaseUser.EmailVerified;
+            await store.SaveUserAsync(user, cancellationToken);
+            return AuthUseCaseResult<TokenResponse>.Success(await IssueTokenResponse(user, cancellationToken));
+        }
+        catch (FirebaseAuthException ex)
+        {
+            logger.LogWarning(ex, "Firebase rejected login token for {Email}.", request.Email?.Trim() ?? "(unknown)");
+            return AuthUseCaseResult<TokenResponse>.Failure(AppAuthErrorCode.InvalidCredentials);
+        }
     }
 
     public async Task<AuthUseCaseResult<TokenResponse>> RefreshAsync(RefreshTokenRequest request, CancellationToken cancellationToken = default)
