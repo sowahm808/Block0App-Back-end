@@ -345,12 +345,26 @@ static void MapAuthEndpoints(RouteGroupBuilder group, string routePrefix)
 {
     group.MapPost(
         "/auth/register",
-        async (RegisterRequest request, IAuthUseCases auth, CancellationToken cancellationToken) =>
+        async (RegisterRequest request, IAuthUseCases auth, ILogger<Program> logger, HttpContext httpContext, CancellationToken cancellationToken) =>
         {
-            var result = await auth.RegisterAsync(request, cancellationToken);
-            return result.Succeeded
-                ? Results.Created($"{routePrefix}/auth/users/{result.Value!.UserId}", result.Value)
-                : ToHttpResult(result);
+            try
+            {
+                var result = await auth.RegisterAsync(request, cancellationToken);
+                return result.Succeeded
+                    ? Results.Created($"{routePrefix}/auth/users/{result.Value!.UserId}", result.Value)
+                    : ToHttpResult(result);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                logger.LogError(
+                    exception,
+                    "Unhandled registration failure for trace {TraceId}.",
+                    httpContext.TraceIdentifier);
+
+                return Results.Problem(
+                    detail: "Registration is temporarily unavailable. Please try again shortly. If the problem continues, contact support with the trace reference.",
+                    statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
         })
         .AllowAnonymous();
 
