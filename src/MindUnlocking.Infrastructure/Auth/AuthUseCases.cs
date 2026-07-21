@@ -78,7 +78,8 @@ public sealed class AuthUseCases(FirebaseApp app, FirebaseUserStore store, AuthT
 
     public async Task<AuthUseCaseResult<TokenResponse>> LoginAsync(LoginRequest request, CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(request.FirebaseIdToken)) return AuthUseCaseResult<TokenResponse>.Failure(AppAuthErrorCode.InvalidCredentials);
+        var errors = AuthRequestValidation.ValidateLogin(request);
+        if (errors.Count > 0) return AuthUseCaseResult<TokenResponse>.Failure(AppAuthErrorCode.ValidationFailed, errors);
 
         try
         {
@@ -94,6 +95,11 @@ public sealed class AuthUseCases(FirebaseApp app, FirebaseUserStore store, AuthT
         {
             logger.LogWarning(ex, "Firebase rejected login token for {Email}.", request.Email?.Trim() ?? "(unknown)");
             return AuthUseCaseResult<TokenResponse>.Failure(AppAuthErrorCode.InvalidCredentials);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogError(ex, "Login failed while synchronizing Firebase user data or issuing tokens for {Email}.", request.Email?.Trim() ?? "(unknown)");
+            return AuthUseCaseResult<TokenResponse>.Failure(AppAuthErrorCode.ExternalProviderUnavailable);
         }
     }
 
