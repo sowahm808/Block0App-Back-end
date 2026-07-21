@@ -46,6 +46,11 @@ public sealed class AuthUseCases(FirebaseApp app, FirebaseUserStore store, AuthT
         {
             return AuthUseCaseResult<RegisterResponse>.Failure(AppAuthErrorCode.DuplicateEmail, new Dictionary<string, string[]> { ["email"] = ["An account with this email address already exists."] });
         }
+        catch (FirebaseAuthException ex) when (IsFirebaseValidationError(ex))
+        {
+            logger.LogWarning(ex, "Firebase rejected registration input for {Email}.", email);
+            return AuthUseCaseResult<RegisterResponse>.Failure(AppAuthErrorCode.ValidationFailed, ToFirebaseValidationErrors(ex));
+        }
     }
 
     public async Task<AuthUseCaseResult<object>> VerifyEmailAsync(VerifyEmailRequest request, CancellationToken cancellationToken = default)
@@ -135,6 +140,30 @@ public sealed class AuthUseCases(FirebaseApp app, FirebaseUserStore store, AuthT
         var refresh = tokens.CreateRefreshToken(now);
         await store.RefreshSessions.Document().SetAsync(new Dictionary<string, object?> { ["userId"] = user.Id, ["tokenHash"] = refresh.Hash, ["createdUtc"] = Timestamp.FromDateTimeOffset(now), ["expiresUtc"] = Timestamp.FromDateTimeOffset(refresh.ExpiresUtc), ["revokedUtc"] = null }, cancellationToken: cancellationToken);
         return new TokenResponse(access.Token, access.ExpiresUtc, refresh.Token, refresh.ExpiresUtc);
+    }
+
+    private static bool IsFirebaseValidationError(FirebaseAuthException exception)
+    {
+        var code = exception.AuthErrorCode.ToString();
+        return string.Equals(code, "InvalidEmail", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(code, "InvalidPassword", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(code, "InvalidArgument", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static IReadOnlyDictionary<string, string[]> ToFirebaseValidationErrors(FirebaseAuthException exception)
+    {
+        var code = exception.AuthErrorCode.ToString();
+        if (string.Equals(code, "InvalidEmail", StringComparison.OrdinalIgnoreCase))
+        {
+            return new Dictionary<string, string[]> { ["email"] = ["Enter a valid email address."] };
+        }
+
+        if (string.Equals(code, "InvalidPassword", StringComparison.OrdinalIgnoreCase))
+        {
+            return new Dictionary<string, string[]> { ["password"] = ["Password does not meet the registration requirements."] };
+        }
+
+        return new Dictionary<string, string[]> { ["registration"] = ["We could not create your account with the details provided."] };
     }
 
     private static RefreshSession ToSession(DocumentSnapshot doc)
