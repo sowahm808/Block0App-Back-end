@@ -2,8 +2,16 @@ using System.ComponentModel.DataAnnotations;
 
 namespace MindUnlocking.Application.Options;
 
-public sealed class JwtOptions { [Required] public string Issuer { get; init; } = string.Empty; [Required] public string Audience { get; init; } = string.Empty; [Required, MinLength(32)] public string SigningKey { get; init; } = string.Empty; public int AccessTokenMinutes { get; init; } = 15; public int RefreshTokenDays { get; init; } = 14; }
-public sealed class SqlOptions { [Required] public string ConnectionString { get; init; } = string.Empty; public int MaxRetryCount { get; init; } = 5; }
+public sealed class FirebaseOptions
+{
+    [Required]
+    public string ProjectId { get; init; } = string.Empty;
+
+    public string? ServiceAccountPath { get; init; }
+    public string UsersCollection { get; init; } = "users";
+    public string RefreshSessionsCollection { get; init; } = "refreshSessions";
+}
+
 public sealed class RedisOptions { public string ConnectionString { get; init; } = string.Empty; public bool RequiredForReadiness { get; init; } }
 public sealed class BlobStorageOptions { public string AccountName { get; init; } = string.Empty; public string Endpoint { get; init; } = string.Empty; public string CertificateContainer { get; init; } = "certificates"; }
 public sealed class ServiceBusOptions { public string Namespace { get; init; } = string.Empty; public string OutboxQueue { get; init; } = "outbox"; }

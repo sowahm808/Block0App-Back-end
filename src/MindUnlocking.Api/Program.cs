@@ -1,19 +1,16 @@
 using System.Security.Claims;
-using System.Text;
 using System.Threading.RateLimiting;
 
 using Asp.Versioning;
+using Microsoft.AspNetCore.Authentication;
 
-using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.AspNetCore.RateLimiting;
-using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Diagnostics.HealthChecks;
-using Microsoft.IdentityModel.Tokens;
 
 using MindUnlocking.Application.Options;
 using MindUnlocking.Application.Security;
 using MindUnlocking.Contracts.Auth;
+using MindUnlocking.Infrastructure.Auth;
 using MindUnlocking.Infrastructure.Persistence;
 
 using Serilog;
@@ -41,18 +38,6 @@ builder.Host.UseSerilog((context, configuration) =>
 // ------------------------------------------------------------
 // Strongly typed configuration
 // ------------------------------------------------------------
-
-builder.Services
-    .AddOptions<JwtOptions>()
-    .Bind(builder.Configuration.GetSection("Jwt"))
-    .ValidateDataAnnotations()
-    .ValidateOnStart();
-
-builder.Services
-    .AddOptions<SqlOptions>()
-    .Bind(builder.Configuration.GetSection("Sql"))
-    .ValidateDataAnnotations()
-    .ValidateOnStart();
 
 builder.Services
     .AddOptions<ChallengeOptions>()
@@ -104,40 +89,14 @@ builder.Services.AddSwaggerGen();
 builder.Services.AddMindUnlockingInfrastructure(builder.Configuration);
 
 // ------------------------------------------------------------
-// JWT authentication
+// Firebase authentication
 // ------------------------------------------------------------
 
-var jwtOptions =
-    builder.Configuration.GetSection("Jwt").Get<JwtOptions>()
-    ?? throw new InvalidOperationException(
-        "The Jwt configuration section is missing.");
-
-if (string.IsNullOrWhiteSpace(jwtOptions.SigningKey))
-{
-    throw new InvalidOperationException(
-        "Jwt:SigningKey must be configured.");
-}
-
 builder.Services
-    .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-    .AddJwtBearer(options =>
-    {
-        options.TokenValidationParameters = new TokenValidationParameters
-        {
-            ValidateIssuer = true,
-            ValidateAudience = true,
-            ValidateIssuerSigningKey = true,
-            ValidateLifetime = true,
-
-            ValidIssuer = jwtOptions.Issuer,
-            ValidAudience = jwtOptions.Audience,
-
-            IssuerSigningKey = new SymmetricSecurityKey(
-                Encoding.UTF8.GetBytes(jwtOptions.SigningKey)),
-
-            ClockSkew = TimeSpan.FromMinutes(1)
-        };
-    });
+    .AddAuthentication(FirebaseAuthenticationHandler.Scheme)
+    .AddScheme<AuthenticationSchemeOptions, FirebaseAuthenticationHandler>(
+        FirebaseAuthenticationHandler.Scheme,
+        options => { });
 
 // ------------------------------------------------------------
 // Authorization
@@ -222,12 +181,7 @@ builder.Services.AddRateLimiter(options =>
 // Health checks
 // ------------------------------------------------------------
 
-builder.Services
-    .AddHealthChecks()
-    .AddDbContextCheck<MindUnlockingDbContext>(
-        name: "sql",
-        failureStatus: HealthStatus.Unhealthy,
-        tags: ["ready"]);
+builder.Services.AddHealthChecks();
 
 var app = builder.Build();
 
@@ -439,9 +393,9 @@ static void MapAuthEndpoints(RouteGroupBuilder group, string routePrefix)
         async (HttpContext httpContext, IAuthUseCases auth, CancellationToken cancellationToken) =>
         {
             var userId = httpContext.User.FindFirstValue(ClaimTypes.NameIdentifier);
-            if (Guid.TryParse(userId, out var parsedUserId))
+            if (!string.IsNullOrWhiteSpace(userId))
             {
-                await auth.LogoutAsync(parsedUserId, cancellationToken);
+                await auth.LogoutAsync(userId, cancellationToken);
             }
 
             return Results.NoContent();
@@ -453,12 +407,12 @@ static void MapAuthEndpoints(RouteGroupBuilder group, string routePrefix)
         async (HttpContext httpContext, IAuthUseCases auth, CancellationToken cancellationToken) =>
         {
             var userId = httpContext.User.FindFirstValue(ClaimTypes.NameIdentifier);
-            if (!Guid.TryParse(userId, out var parsedUserId))
+            if (string.IsNullOrWhiteSpace(userId))
             {
                 return Results.Unauthorized();
             }
 
-            var result = await auth.GetCurrentUserAsync(parsedUserId, cancellationToken);
+            var result = await auth.GetCurrentUserAsync(userId, cancellationToken);
             return result.Succeeded ? Results.Ok(result.Value) : ToHttpResult(result);
         })
         .RequireAuthorization();

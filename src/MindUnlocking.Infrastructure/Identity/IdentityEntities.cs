@@ -1,23 +1,21 @@
-using Microsoft.AspNetCore.Identity;
-
 namespace MindUnlocking.Infrastructure.Identity;
 
-public sealed class ApplicationUser : IdentityUser<Guid>
+public sealed class ApplicationUser
 {
+    public string Id { get; set; } = string.Empty;
+    public string Email { get; set; } = string.Empty;
     public string DisplayName { get; set; } = string.Empty;
+    public bool EmailVerified { get; set; }
+    public bool MfaEnabled { get; set; }
     public bool AdministrativeMfaRequired { get; set; }
     public DateTimeOffset CreatedUtc { get; set; } = DateTimeOffset.UtcNow;
-}
-
-public sealed class ApplicationRole : IdentityRole<Guid>
-{
-    public string Description { get; set; } = string.Empty;
+    public IReadOnlyCollection<string> Permissions { get; set; } = [];
 }
 
 public sealed class RefreshSession
 {
-    public Guid Id { get; set; } = Guid.NewGuid();
-    public Guid UserId { get; set; }
+    public string Id { get; set; } = Guid.NewGuid().ToString("N");
+    public string UserId { get; set; } = string.Empty;
     public string TokenHash { get; set; } = string.Empty;
     public string? ReplacedByTokenHash { get; set; }
     public DateTimeOffset CreatedUtc { get; set; } = DateTimeOffset.UtcNow;

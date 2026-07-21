@@ -1,200 +1,120 @@
-using System.Security.Claims;
-using Microsoft.AspNetCore.Identity;
-using Microsoft.EntityFrameworkCore;
+using FirebaseAdmin;
+using FirebaseAdmin.Auth;
+using Google.Cloud.Firestore;
 using Microsoft.Extensions.Logging;
 using MindUnlocking.Application.Security;
+using AppAuthErrorCode = MindUnlocking.Application.Security.AuthErrorCode;
 using MindUnlocking.Contracts.Auth;
+using MindUnlocking.Domain.Identity;
 using MindUnlocking.Infrastructure.Identity;
-using MindUnlocking.Infrastructure.Persistence;
 
 namespace MindUnlocking.Infrastructure.Auth;
 
-public sealed class AuthUseCases(
-    UserManager<ApplicationUser> users,
-    MindUnlockingDbContext db,
-    AuthTokenService tokens,
-    ILogger<AuthUseCases> logger) : IAuthUseCases
+public sealed class AuthUseCases(FirebaseApp app, FirebaseUserStore store, AuthTokenService tokens, ILogger<AuthUseCases> logger) : IAuthUseCases
 {
     public async Task<AuthUseCaseResult<RegisterResponse>> RegisterAsync(RegisterRequest request, CancellationToken cancellationToken = default)
     {
-        var requestValidationErrors = AuthRequestValidation.ValidateRegister(request);
-        if (requestValidationErrors.Count > 0)
-        {
-            return AuthUseCaseResult<RegisterResponse>.Failure(AuthErrorCode.ValidationFailed, requestValidationErrors);
-        }
+        var errors = AuthRequestValidation.ValidateRegister(request);
+        if (errors.Count > 0) return AuthUseCaseResult<RegisterResponse>.Failure(AppAuthErrorCode.ValidationFailed, errors);
 
         var email = request.Email.Trim();
-        var existingUser = await users.FindByEmailAsync(email);
-        if (existingUser is not null)
+        try
         {
-            return AuthUseCaseResult<RegisterResponse>.Failure(AuthErrorCode.DuplicateEmail, FieldError("email", "An account with this email address already exists."));
-        }
+            var record = await FirebaseAuth.DefaultInstance.CreateUserAsync(new UserRecordArgs
+            {
+                Email = email,
+                Password = request.Password,
+                DisplayName = request.DisplayName.Trim(),
+                EmailVerified = false
+            }, cancellationToken);
 
-        var user = new ApplicationUser { UserName = email, Email = email, DisplayName = request.DisplayName.Trim() };
-        var result = await users.CreateAsync(user, request.Password);
-        if (!result.Succeeded)
+            var user = new ApplicationUser { Id = record.Uid, Email = email, DisplayName = request.DisplayName.Trim(), Permissions = [Permissions.ScholarAccess] };
+            await store.SaveUserAsync(user, cancellationToken);
+            await FirebaseAuth.DefaultInstance.SetCustomUserClaimsAsync(record.Uid, new Dictionary<string, object> { ["permissions"] = user.Permissions.ToArray(), ["role"] = "scholar" }, cancellationToken);
+            var link = await FirebaseAuth.DefaultInstance.GenerateEmailVerificationLinkAsync(email, cancellationToken: cancellationToken);
+            return AuthUseCaseResult<RegisterResponse>.Success(new RegisterResponse(record.Uid, email, link));
+        }
+        catch (FirebaseAuthException ex) when (ex.AuthErrorCode == FirebaseAdmin.Auth.AuthErrorCode.EmailAlreadyExists)
         {
-            return AuthUseCaseResult<RegisterResponse>.Failure(AuthErrorCode.ValidationFailed, ToValidationDictionary(result));
+            return AuthUseCaseResult<RegisterResponse>.Failure(AppAuthErrorCode.DuplicateEmail, new Dictionary<string, string[]> { ["email"] = ["An account with this email address already exists."] });
         }
-
-        await users.AddClaimAsync(user, new Claim(AuthorizationPolicies.PermissionClaimType, MindUnlocking.Domain.Identity.Permissions.ScholarAccess));
-        var confirmationToken = await users.GenerateEmailConfirmationTokenAsync(user);
-        return AuthUseCaseResult<RegisterResponse>.Success(new RegisterResponse(user.Id, user.Email!, confirmationToken));
     }
 
     public async Task<AuthUseCaseResult<object>> VerifyEmailAsync(VerifyEmailRequest request, CancellationToken cancellationToken = default)
     {
-        var user = await users.FindByEmailAsync(request.Email.Trim());
-        if (user is null)
-        {
-            return AuthUseCaseResult<object>.Failure(AuthErrorCode.UserNotFound);
-        }
-
-        var result = await users.ConfirmEmailAsync(user, request.Token);
-        return result.Succeeded
-            ? AuthUseCaseResult<object>.Success(new object())
-            : AuthUseCaseResult<object>.Failure(AuthErrorCode.ValidationFailed, ToValidationDictionary(result));
+        var decoded = await FirebaseAuth.DefaultInstance.VerifyIdTokenAsync(request.Token, cancellationToken);
+        var user = await FirebaseAuth.DefaultInstance.GetUserAsync(decoded.Uid, cancellationToken);
+        if (!string.Equals(user.Email, request.Email.Trim(), StringComparison.OrdinalIgnoreCase)) return AuthUseCaseResult<object>.Failure(AppAuthErrorCode.UserNotFound);
+        await store.UserDocument(decoded.Uid).UpdateAsync("emailVerified", user.EmailVerified, cancellationToken: cancellationToken);
+        return AuthUseCaseResult<object>.Success(new object());
     }
 
     public async Task<AuthUseCaseResult<TokenResponse>> LoginAsync(LoginRequest request, CancellationToken cancellationToken = default)
     {
-        var user = await users.FindByEmailAsync(request.Email.Trim());
-        if (user is null || !await users.CheckPasswordAsync(user, request.Password))
-        {
-            return AuthUseCaseResult<TokenResponse>.Failure(AuthErrorCode.InvalidCredentials);
-        }
-
-        if (!await users.IsEmailConfirmedAsync(user))
-        {
-            return AuthUseCaseResult<TokenResponse>.Failure(AuthErrorCode.EmailVerificationRequired);
-        }
-
-        var requiresMfa = user.AdministrativeMfaRequired || await users.GetTwoFactorEnabledAsync(user);
-        if (requiresMfa && string.IsNullOrWhiteSpace(request.MfaCode))
-        {
-            return AuthUseCaseResult<TokenResponse>.Failure(AuthErrorCode.MfaRequired);
-        }
-
-        if (!string.IsNullOrWhiteSpace(request.MfaCode) && !await users.VerifyTwoFactorTokenAsync(user, TokenOptions.DefaultAuthenticatorProvider, request.MfaCode))
-        {
-            return AuthUseCaseResult<TokenResponse>.Failure(AuthErrorCode.InvalidMfaCode);
-        }
-
+        if (string.IsNullOrWhiteSpace(request.FirebaseIdToken)) return AuthUseCaseResult<TokenResponse>.Failure(AppAuthErrorCode.InvalidCredentials);
+        var decoded = await FirebaseAuth.DefaultInstance.VerifyIdTokenAsync(request.FirebaseIdToken, cancellationToken);
+        var firebaseUser = await FirebaseAuth.DefaultInstance.GetUserAsync(decoded.Uid, cancellationToken);
+        if (!firebaseUser.EmailVerified) return AuthUseCaseResult<TokenResponse>.Failure(AppAuthErrorCode.EmailVerificationRequired);
+        var user = await store.GetUserAsync(decoded.Uid, cancellationToken) ?? new ApplicationUser { Id = decoded.Uid, Email = firebaseUser.Email, DisplayName = firebaseUser.DisplayName, EmailVerified = firebaseUser.EmailVerified, Permissions = [Permissions.ScholarAccess] };
+        user.EmailVerified = firebaseUser.EmailVerified;
+        await store.SaveUserAsync(user, cancellationToken);
         return AuthUseCaseResult<TokenResponse>.Success(await IssueTokenResponse(user, cancellationToken));
     }
 
     public async Task<AuthUseCaseResult<TokenResponse>> RefreshAsync(RefreshTokenRequest request, CancellationToken cancellationToken = default)
     {
-        var now = DateTimeOffset.UtcNow;
-        var tokenHash = tokens.HashRefreshToken(request.RefreshToken);
-        var session = await db.RefreshSessions.SingleOrDefaultAsync(x => x.TokenHash == tokenHash, cancellationToken);
-        if (session is null)
-        {
-            return AuthUseCaseResult<TokenResponse>.Failure(AuthErrorCode.InvalidRefreshToken);
-        }
-
-        if (!session.IsActive(now))
-        {
-            await RevokeAllUserSessions(session.UserId, now, "refresh-token-reuse-detected", cancellationToken);
-            logger.LogWarning("Refresh token reuse detected for user {UserId} and session {SessionId}", session.UserId, session.Id);
-            return AuthUseCaseResult<TokenResponse>.Failure(AuthErrorCode.InvalidRefreshToken);
-        }
-
-        var user = await users.FindByIdAsync(session.UserId.ToString());
-        if (user is null || !user.EmailConfirmed)
-        {
-            return AuthUseCaseResult<TokenResponse>.Failure(AuthErrorCode.InvalidRefreshToken);
-        }
-
-        session.RevokedUtc = now;
-        session.RevocationReason = "rotated";
-        var refreshToken = tokens.CreateRefreshToken(now);
-        session.ReplacedByTokenHash = refreshToken.Hash;
-        db.RefreshSessions.Add(new RefreshSession { UserId = user.Id, TokenHash = refreshToken.Hash, ExpiresUtc = refreshToken.ExpiresUtc });
-        await db.SaveChangesAsync(cancellationToken);
-
-        var accessToken = tokens.CreateAccessToken(user, await GetPermissions(user), now);
-        return AuthUseCaseResult<TokenResponse>.Success(new TokenResponse(accessToken.Token, accessToken.ExpiresUtc, refreshToken.Token, refreshToken.ExpiresUtc));
+        var hash = tokens.HashRefreshToken(request.RefreshToken);
+        var query = await store.RefreshSessions.WhereEqualTo("tokenHash", hash).Limit(1).GetSnapshotAsync(cancellationToken);
+        var doc = query.Documents.SingleOrDefault();
+        if (doc is null) return AuthUseCaseResult<TokenResponse>.Failure(AppAuthErrorCode.InvalidRefreshToken);
+        var session = ToSession(doc);
+        if (!session.IsActive(DateTimeOffset.UtcNow)) return AuthUseCaseResult<TokenResponse>.Failure(AppAuthErrorCode.InvalidRefreshToken);
+        var user = await store.GetUserAsync(session.UserId, cancellationToken);
+        if (user is null) return AuthUseCaseResult<TokenResponse>.Failure(AppAuthErrorCode.InvalidRefreshToken);
+        await doc.Reference.UpdateAsync(new Dictionary<string, object?> { ["revokedUtc"] = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow), ["revocationReason"] = "rotated" }, cancellationToken: cancellationToken);
+        return AuthUseCaseResult<TokenResponse>.Success(await IssueTokenResponse(user, cancellationToken));
     }
 
     public async Task<ForgotPasswordResponse> ForgotPasswordAsync(ForgotPasswordRequest request, bool includeResetToken, CancellationToken cancellationToken = default)
     {
-        var user = await users.FindByEmailAsync(request.Email.Trim());
-        if (user is null)
-        {
-            return new ForgotPasswordResponse(null);
-        }
-
-        var token = await users.GeneratePasswordResetTokenAsync(user);
-        return new ForgotPasswordResponse(includeResetToken ? token : null);
+        var link = await FirebaseAuth.DefaultInstance.GeneratePasswordResetLinkAsync(request.Email.Trim(), cancellationToken: cancellationToken);
+        return new ForgotPasswordResponse(includeResetToken ? link : null);
     }
 
-    public async Task<AuthUseCaseResult<object>> ResetPasswordAsync(ResetPasswordRequest request, CancellationToken cancellationToken = default)
-    {
-        var user = await users.FindByEmailAsync(request.Email.Trim());
-        if (user is null)
-        {
-            return AuthUseCaseResult<object>.Success(new object());
-        }
-
-        var result = await users.ResetPasswordAsync(user, request.Token, request.NewPassword);
-        if (result.Succeeded)
-        {
-            await RevokeAllUserSessions(user.Id, DateTimeOffset.UtcNow, "password-reset", cancellationToken);
-            return AuthUseCaseResult<object>.Success(new object());
-        }
-
-        return AuthUseCaseResult<object>.Failure(AuthErrorCode.ValidationFailed, ToValidationDictionary(result));
-    }
+    public Task<AuthUseCaseResult<object>> ResetPasswordAsync(ResetPasswordRequest request, CancellationToken cancellationToken = default) =>
+        Task.FromResult(AuthUseCaseResult<object>.Failure(AppAuthErrorCode.ValidationFailed, new Dictionary<string, string[]> { ["token"] = ["Password resets are completed with the Firebase password reset link."] }));
 
     public async Task RevokeRefreshTokenAsync(RevokeRefreshTokenRequest request, CancellationToken cancellationToken = default)
     {
-        var session = await db.RefreshSessions.SingleOrDefaultAsync(x => x.TokenHash == tokens.HashRefreshToken(request.RefreshToken), cancellationToken);
-        if (session is not null && session.RevokedUtc is null)
-        {
-            session.RevokedUtc = DateTimeOffset.UtcNow;
-            session.RevocationReason = string.IsNullOrWhiteSpace(request.Reason) ? "revoked" : request.Reason.Trim();
-            await db.SaveChangesAsync(cancellationToken);
-        }
+        var hash = tokens.HashRefreshToken(request.RefreshToken);
+        var query = await store.RefreshSessions.WhereEqualTo("tokenHash", hash).Limit(1).GetSnapshotAsync(cancellationToken);
+        foreach (var doc in query.Documents) await doc.Reference.UpdateAsync("revokedUtc", Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow), cancellationToken: cancellationToken);
     }
 
-    public Task LogoutAsync(Guid userId, CancellationToken cancellationToken = default) =>
-        RevokeAllUserSessions(userId, DateTimeOffset.UtcNow, "logout", cancellationToken);
-
-    public async Task<AuthUseCaseResult<CurrentUserResponse>> GetCurrentUserAsync(Guid userId, CancellationToken cancellationToken = default)
+    public async Task LogoutAsync(string userId, CancellationToken cancellationToken = default)
     {
-        var user = await users.FindByIdAsync(userId.ToString());
-        return user is null
-            ? AuthUseCaseResult<CurrentUserResponse>.Failure(AuthErrorCode.UserNotFound)
-            : AuthUseCaseResult<CurrentUserResponse>.Success(new CurrentUserResponse(user.Id, user.Email ?? string.Empty, user.DisplayName, await GetPermissions(user), user.EmailConfirmed, user.TwoFactorEnabled));
+        var query = await store.RefreshSessions.WhereEqualTo("userId", userId).WhereEqualTo("revokedUtc", null).GetSnapshotAsync(cancellationToken);
+        foreach (var doc in query.Documents) await doc.Reference.UpdateAsync("revokedUtc", Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow), cancellationToken: cancellationToken);
+    }
+
+    public async Task<AuthUseCaseResult<CurrentUserResponse>> GetCurrentUserAsync(string userId, CancellationToken cancellationToken = default)
+    {
+        var user = await store.GetUserAsync(userId, cancellationToken);
+        return user is null ? AuthUseCaseResult<CurrentUserResponse>.Failure(AppAuthErrorCode.UserNotFound) : AuthUseCaseResult<CurrentUserResponse>.Success(new CurrentUserResponse(user.Id, user.Email, user.DisplayName, user.Permissions, user.EmailVerified, user.MfaEnabled));
     }
 
     private async Task<TokenResponse> IssueTokenResponse(ApplicationUser user, CancellationToken cancellationToken)
     {
         var now = DateTimeOffset.UtcNow;
-        var accessToken = tokens.CreateAccessToken(user, await GetPermissions(user), now);
-        var refreshToken = tokens.CreateRefreshToken(now);
-        db.RefreshSessions.Add(new RefreshSession { UserId = user.Id, TokenHash = refreshToken.Hash, ExpiresUtc = refreshToken.ExpiresUtc });
-        await db.SaveChangesAsync(cancellationToken);
-        return new TokenResponse(accessToken.Token, accessToken.ExpiresUtc, refreshToken.Token, refreshToken.ExpiresUtc);
+        var access = await tokens.CreateAccessToken(user, user.Permissions, now);
+        var refresh = tokens.CreateRefreshToken(now);
+        await store.RefreshSessions.Document().SetAsync(new Dictionary<string, object?> { ["userId"] = user.Id, ["tokenHash"] = refresh.Hash, ["createdUtc"] = Timestamp.FromDateTimeOffset(now), ["expiresUtc"] = Timestamp.FromDateTimeOffset(refresh.ExpiresUtc), ["revokedUtc"] = null }, cancellationToken: cancellationToken);
+        return new TokenResponse(access.Token, access.ExpiresUtc, refresh.Token, refresh.ExpiresUtc);
     }
 
-    private async Task<string[]> GetPermissions(ApplicationUser user) =>
-        (await users.GetClaimsAsync(user))
-        .Where(claim => claim.Type == AuthorizationPolicies.PermissionClaimType)
-        .Select(claim => claim.Value)
-        .Distinct(StringComparer.Ordinal)
-        .Order(StringComparer.Ordinal)
-        .ToArray();
-
-    private async Task RevokeAllUserSessions(Guid userId, DateTimeOffset now, string reason, CancellationToken cancellationToken) =>
-        await db.RefreshSessions
-            .Where(session => session.UserId == userId && session.RevokedUtc == null)
-            .ExecuteUpdateAsync(update => update.SetProperty(session => session.RevokedUtc, now).SetProperty(session => session.RevocationReason, reason), cancellationToken);
-
-    private static Dictionary<string, string[]> ToValidationDictionary(IdentityResult result) =>
-        result.Errors.GroupBy(error => error.Code).ToDictionary(group => group.Key, group => group.Select(error => error.Description).ToArray());
-
-    private static IReadOnlyDictionary<string, string[]> FieldError(string field, string error) =>
-        new Dictionary<string, string[]> { [field] = [error] };
+    private static RefreshSession ToSession(DocumentSnapshot doc)
+    {
+        var data = doc.ToDictionary();
+        return new RefreshSession { Id = doc.Id, UserId = data["userId"].ToString()!, TokenHash = data["tokenHash"].ToString()!, ExpiresUtc = new DateTimeOffset(((Timestamp)data["expiresUtc"]).ToDateTime(), TimeSpan.Zero), RevokedUtc = data.TryGetValue("revokedUtc", out var revoked) && revoked is Timestamp ts ? new DateTimeOffset(ts.ToDateTime(), TimeSpan.Zero) : null };
+    }
 }
