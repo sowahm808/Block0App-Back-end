@@ -92,11 +92,28 @@ builder.Services.AddMindUnlockingInfrastructure(builder.Configuration);
 // Firebase authentication
 // ------------------------------------------------------------
 
+// builder.Services
+//     .AddAuthentication(FirebaseAuthenticationHandler.Scheme)
+//     .AddScheme<AuthenticationSchemeOptions, FirebaseAuthenticationHandler>(
+//         FirebaseAuthenticationHandler.Scheme,
+//         options => { });
+
+// ------------------------------------------------------------
+// Firebase authentication
+// ------------------------------------------------------------
+
 builder.Services
-    .AddAuthentication(FirebaseAuthenticationHandler.Scheme)
+    .AddAuthentication(options =>
+    {
+        options.DefaultAuthenticateScheme =
+            FirebaseAuthenticationHandler.AuthenticationScheme;
+
+        options.DefaultChallengeScheme =
+            FirebaseAuthenticationHandler.AuthenticationScheme;
+    })
     .AddScheme<AuthenticationSchemeOptions, FirebaseAuthenticationHandler>(
-        FirebaseAuthenticationHandler.Scheme,
-        options => { });
+        FirebaseAuthenticationHandler.AuthenticationScheme,
+        _ => { });
 
 // ------------------------------------------------------------
 // Authorization
