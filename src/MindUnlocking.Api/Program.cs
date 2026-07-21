@@ -447,6 +447,8 @@ static IResult ToHttpResult<T>(AuthUseCaseResult<T> result) =>
         AuthErrorCode.UserNotFound => Results.NotFound(),
         AuthErrorCode.InvalidCredentials or AuthErrorCode.InvalidMfaCode or AuthErrorCode.InvalidRefreshToken =>
             Results.Unauthorized(),
+        AuthErrorCode.ExternalProviderUnavailable =>
+            Results.Problem(detail: "Registration is temporarily unavailable. Please try again shortly.", statusCode: StatusCodes.Status503ServiceUnavailable),
         _ => Results.Problem(statusCode: StatusCodes.Status500InternalServerError)
     };
 
